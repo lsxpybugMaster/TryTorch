@@ -6,7 +6,7 @@ __init__文件在用户导入文件夹(包)时初始化执行
 
 # 将子文件中所有模块全部暴露
 from .autograd import *
-
+from .array_device import *
 
 
 
