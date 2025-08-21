@@ -8,7 +8,8 @@ __init__文件在用户导入文件夹(包)时初始化执行
 from .autograd import *
 from .array_device import *
 
-
+# 
+from . import ops
 
 
 # 之后逻辑也会在导入包时自动执行

@@ -1,10 +1,7 @@
-'''
-自动求导部分
-- 定义计算图结构
-'''
-
 import numpy
 import cupy
+
+import trytorch
 
 # 类型约束,不仅约束容器类型,同时约束类型中类型  如List[int]
 from typing import List, Optional, Tuple, Union
@@ -13,7 +10,17 @@ from .array_device import *
 
 # array_api包含一系列跨API的计算函数
 # NDArray是一个类型 : null | numpy.ndarray | cupy.ndarray
-from .array_api import array_api, NDArray
+from .array_api import NDArray
+
+
+
+'''
+自动求导部分
+- 定义计算图结构
+'''
+
+
+LAZY_MODE = False
 
 # 运算操作 计算图边
 # 虚基类
@@ -53,6 +60,15 @@ class Op:
             return (output,)
 
 
+# 张量运算类,构建计算图的入口
+# 注意其还需派生真正的运算类,如加,减
+class TensorOp(Op):
+
+    def __call__(self, *args):
+        return Tensor.make_from_op(self, args)
+
+
+
 # 计算图节点
 class Value:
     
@@ -72,7 +88,7 @@ class Value:
     
     requires_grad: bool
 
-    # 计算该节点的值
+    # 计算该节点的值(如果没值则构造节点)
     def realize_cached_data(self):
         # 如果该节点有值,说明之前已经计算过一次,无需再算
         if self.cached_data is not None:
@@ -83,7 +99,9 @@ class Value:
         self.cached_data = self.op.compute(
             *[x.realize_cached_data() for x in self.inputs] 
         )
+
         return self.cached_data
+
 
     # 是否为叶节点(数据入口),无op
     def is_leaf(self):
@@ -114,9 +132,10 @@ class Tensor(Value):
 
     # ⚠️类型注解,不起任何作用,当作注释
     grad: "Tensor"
+    device: Optional[Device]
 
     # 初始化节点值self.cached_data
-    def _set_cached_data(array,*,device,dtype):
+    def _set_cached_data(self, array,*,device = None, dtype = None):
         # Tensor的复制,需要判断类型来源是否相同(numpy与cupy)
         if isinstance(array,Tensor):
             device = array.device if device is None else device
@@ -166,4 +185,107 @@ class Tensor(Value):
     @staticmethod
     def _array_from_cupy(array, dtype):
         return cupy.array(array,dtype=dtype)
-       
+    
+
+    # 构建计算图
+    def make_from_op(op: Op, inputs: List["Value"]):
+
+        # 工厂模式, __new__的使用跳过了__init__的执行,使得我们可以自定义初始化
+        tensor = Tensor.__new__(Tensor)
+        tensor._init(op, inputs)
+
+        if not LAZY_MODE:
+            if not tensor.requires_grad:
+                return tensor.detach()
+            tensor.realize_cached_data()
+        return tensor
+    
+    # 构建离散的点,不参与图构建(用于detach)
+    @staticmethod
+    def make_const(data, requires_grad = False):
+        
+        tensor = Tensor.__new__(Tensor)
+        tensor._init(
+            None,
+            [],
+            cached_data=data,
+            requires_grad=requires_grad,
+        )
+        return tensor
+    
+    # Pythonic Getter & Setter
+    @property
+    def data(self):
+        return self.detach()
+    
+
+    @data.setter
+    def data(self, value):
+        assert isinstance(value, Tensor)
+        assert value.dtype == self.dtype, f"{value.dtype!s} {self.dtype!s}"
+    
+        self.cached_data = value.realize_cached_data()
+
+    
+    # 用法 output = model(inputs).detach()
+    def detach(self):
+        return Tensor.make_const(self.realize_cached_data())
+    
+
+    @property
+    def shape(self):
+        return self.realize_cached_data().shape
+    
+    @property
+    def dtype(self):
+        return self.realize_cached_data().dtype
+
+    @property
+    def device(self):
+        data = self.realize_cached_data()
+        if isinstance(data, (numpy.generic, numpy.ndarray)):
+            return cpu()
+        elif isinstance(data, (cupy.generic, numpy.ndarray)):
+            return gpu()
+        else:
+            raise ValueError(f"Unsupported device, datatype: {type(data)}")
+    
+    # 根据新设备转换数据格式
+    @device.setter
+    def device(self, new_device):
+        if new_device == cpu():
+            self.cached_data = numpy.array(self.cached_data)
+        
+        elif new_device == gpu():
+            self.cached_data = cupy.array(self.cached_data) 
+
+        else:
+            raise ValueError(f"Unsupported device type: {new_device}")
+
+    # 在此初始化设备信息
+    def to(self, device: str):
+        if device == 'cpu':
+            self.device = cpu()
+        elif device == 'gpu':
+            self.device = gpu()
+        else:
+            raise ValueError(f"Unsupported device type: {device} Use 'cpu' or 'gpu'")
+
+
+    def __repr__(self):
+        data: NDArray = self.realize_cached_data()
+        return f"tensor({data}, dtpye={data.dtype})"
+
+    def __str__(self):
+        return self.__repr__()
+    
+
+
+    #---------------------------实现算子调用----------------------------------------
+    
+    # 重载运算符
+    def __add__(self, other):
+        if isinstance(other, Tensor):
+            return trytorch.ops.EWiseAdd()(self, other)
+        else:
+            raise ValueError("meixei");

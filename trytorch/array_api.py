@@ -8,9 +8,9 @@
 import numpy
 import cupy
 # 从当前路径查找,防止查找到根目录下同名模块
-from .array_device import Device, cpu 
+from .array_device import Device, cpu, gpu
 
-from typing import Optional,Union
+from typing import Optional, Union
 
 # 一个类型别名,该类型可以是 null | numpy.ndarray | cupy.ndarray
 NDArray = Optional[Union[numpy.ndarray, cupy.ndarray]]
@@ -25,15 +25,20 @@ class array_api:
     def _backend_from_array(data):
         if type(data).__module__ == numpy.__name__:
             return numpy
+        elif type(data).__module__ == cupy.__name__:
+            return cupy
         else:
-            raise ValueError("cpu only now")
+            raise ValueError(f"Unknown array types: {type(data).__module__}")
+        
         
     @staticmethod
     def _backend_from_device(device: Device):
         if device == cpu(): # Device实现了__eq__
             return numpy
+        elif device == gpu():
+            return cupy
         else:
-            raise ValueError("cpu only now")
+            raise ValueError(f"Unknown device: {type(device)}")
         
 
     '''
