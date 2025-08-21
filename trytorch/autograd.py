@@ -272,6 +272,20 @@ class Tensor(Value):
             raise ValueError(f"Unsupported device type: {device} Use 'cpu' or 'gpu'")
 
 
+    # 返回numpy类型数据
+    def numpy(self):
+        data = self.realize_cached_data()
+        if isinstance(data, (numpy.generic, numpy.ndarray)):
+            return data
+        return data.numpy()
+
+    # 返回cupy类型数据
+    def cupy(self):
+        data = self.realize_cached_data()
+        if isinstance(data, (cupy.generic, cupy.ndarray)):
+            return data
+        return data.cupy()
+
     def __repr__(self):
         data: NDArray = self.realize_cached_data()
         return f"tensor({data}, dtpye={data.dtype})"
@@ -279,13 +293,53 @@ class Tensor(Value):
     def __str__(self):
         return self.__repr__()
     
-
-
     #---------------------------实现算子调用----------------------------------------
     
-    # 重载运算符
+    ##### 重载运算符
+    #  +
     def __add__(self, other):
         if isinstance(other, Tensor):
             return trytorch.ops.EWiseAdd()(self, other)
+        # self 为 Tensor, other 为标量
         else:
-            raise ValueError("meixei");
+            return trytorch.ops.AddScalar(other)(self)
+
+    #  - 
+    def __sub__(self, other):
+        if isinstance(other, Tensor):
+            return trytorch.ops.EWiseAdd()(self, trytorch.ops.Negate()(other))
+        # self 为 Tensor, other 为标量
+        else:
+            return trytorch.ops.AddScalar(-other)(self)
+
+    #  * 
+    def __mul__(self, other):
+        if isinstance(other, Tensor):
+            return trytorch.ops.EWiseMul()(self, other)
+        else:
+            return trytorch.ops.MulScalar(other)(self)
+
+    #  /
+    def __truediv__(self, other):
+        if isinstance(other, Tensor):
+            return trytorch.ops.EWiseDiv()(self, other)
+        else:
+            return trytorch.ops.DivScalar(other)(self)  
+
+    #  **
+    def __pow__(self, other):
+        if isinstance(other, Tensor):
+            raise NotImplementedError()
+        else:
+            return trytorch.ops.PowerScalar(other)(self)
+    
+    # @
+    def __matmul__(self, other):
+        return trytorch.ops.MatMul()(self, other)
+            
+    ##### 实现计算函数
+    def matmul(self, other):
+        return trytorch.ops.MatMul()(self, other)
+    
+    def sum(self, axes = None):
+        return trytorch.ops.Summation(axes)(self)
