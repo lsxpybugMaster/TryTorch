@@ -290,8 +290,7 @@ class Tensor(Value):
         data: NDArray = self.realize_cached_data()
         return f"tensor({data}, dtpye={data.dtype})"
 
-    def __str__(self):
-        return self.__repr__()
+    __str__ = __repr__
     
     #---------------------------实现算子调用----------------------------------------
     
@@ -303,6 +302,10 @@ class Tensor(Value):
         # self 为 Tensor, other 为标量
         else:
             return trytorch.ops.AddScalar(other)(self)
+
+    #  -x
+    def __neg__(self):
+        return trytorch.ops.Negate()(self)
 
     #  - 
     def __sub__(self, other):
@@ -343,3 +346,18 @@ class Tensor(Value):
     
     def sum(self, axes = None):
         return trytorch.ops.Summation(axes)(self)
+    
+    def broadcast_to(self, shape):
+        return trytorch.ops.BroadcastTo(shape)(self)
+    
+    def reshape(self, shape):
+        return trytorch.ops.Reshape(shape)(self)
+    
+    def transpose(self, axes=None):
+        return trytorch.ops.Transpose(axes)(self)
+    
+    
+    __radd__ = __add__
+    __rmul__ = __mul__
+    __rsub__ = __sub__
+    __rmatmul__ = __matmul__

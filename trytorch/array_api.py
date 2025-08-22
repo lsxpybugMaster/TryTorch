@@ -94,6 +94,14 @@ class array_api:
         return array_api._backend_from_array(a).exp(a)
     
     @staticmethod
+    def sin(a):
+        return array_api._backend_from_array(a).sin(a)
+    
+    @staticmethod
+    def cos(a):
+        return array_api._backend_from_array(a).cos(a)
+    
+    @staticmethod
     def negative(a):
         return array_api._backend_from_array(a).negative(a)
     

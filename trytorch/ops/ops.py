@@ -22,6 +22,15 @@ class EWiseAdd(TensorOp):
     def compute(self, a: NDArray, b: NDArray):
         return a + b
     
+    '''
+    y = a + b   
+    ∂y/∂a = 1  v¯{a-y} = grad_y * 1 = grad_y
+    ∂y/∂b = 1  v¯{b-y} = grad_y * 1 = grad_y
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        return out_grad, out_grad
+    
+
 '''
 调用链
 EWiseAdd().__call__().make_from_op().realize_cached_data().compute()
@@ -40,6 +49,15 @@ class AddScalar(TensorOp):
     def compute(self, a: NDArray):
         return a + self.scalar
     
+    '''
+    y = a + C
+    ∂y/∂a = 1    v¯{a-y} = grad_y * 1 = grad_y
+    C是非张量,不需传播梯度
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        return out_grad
+    
+
 def add_scalar(a, scalar):
     return AddScalar(scalar)(a)
 
@@ -61,6 +79,18 @@ class EWiseMul(TensorOp):
     def compute(self, a: NDArray, b: NDArray):
         return a * b
     
+    '''
+    y = a * b
+    ∂y/∂a = b  v¯{a-y} = grad_y * b 
+    ∂y/∂b = a  v¯{b-y} = grad_y * a 
+    所以还需要知道a, b的节点值
+    存储在y的input: List[Tensor] 结构中
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a, b = node.inputs    
+        return b * out_grad, a * out_grad
+    
+
 def multiply(a, b):
     return EWiseMul()(a, b)
 
@@ -202,6 +232,27 @@ class Log(TensorOp):
 
 def log(a):
     return Log()(a)
+
+
+
+# sin函数
+class Sin(TensorOp):
+    def compute(self, a):
+        return array_api.sin(a)
+
+
+def sin(a):
+    return Sin()(a)
+
+
+
+class Cos(TensorOp):
+    def compute(self, a):
+        return array_api.cos(a)
+
+
+def cos(a):
+    return cos()(a)
 
 
 
