@@ -10,6 +10,7 @@ from .array_device import *
 
 # 
 from . import ops
+from . import init
 
 
 # 之后逻辑也会在导入包时自动执行

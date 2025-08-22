@@ -2,6 +2,7 @@ import numpy
 import cupy
 
 import trytorch
+from trytorch import init
 
 # 类型约束,不仅约束容器类型,同时约束类型中类型  如List[int]
 from typing import List, Optional, Tuple, Union, Dict
@@ -11,6 +12,7 @@ from .array_device import *
 # array_api包含一系列跨API的计算函数
 # NDArray是一个类型 : null | numpy.ndarray | cupy.ndarray
 from .array_api import NDArray
+
 
 
 
@@ -439,10 +441,13 @@ def compute_gradient_of_variables(output_tensor: Tensor, out_grad):
 
         # 填入字典
         for node_k, partial_vk_to_i in zip(node_i.inputs, partial_vk_to_i_list):
+            # 🐍 Python 字典不会自动创建不存在的键
             node_to_output_grads_list.setdefault(node_k, list())
             node_to_output_grads_list[node_k].append(partial_vk_to_i)  
 
     # 🤗 for结束, 所有梯度计算完毕 
+
+
 
 ##### 与图有关的辅助函数
 

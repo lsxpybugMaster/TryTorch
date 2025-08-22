@@ -232,6 +232,7 @@ def matmul(a, b):
     return MatMul()(a, b)
 
 
+
 # log函数
 class Log(TensorOp):
     def compute(self, a):
@@ -281,6 +282,8 @@ class Exp(TensorOp):
 
 def exp(a):
     return Exp()(a)
+
+
 
 '''
 f(x) = log(e_x1 + e_x2 + ... + e_xn)
