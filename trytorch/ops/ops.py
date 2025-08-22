@@ -55,7 +55,7 @@ class AddScalar(TensorOp):
     C是非张量,不需传播梯度
     '''
     def gradient(self, out_grad: Tensor, node: Tensor):
-        return out_grad
+        return (out_grad,)
     
 
 def add_scalar(a, scalar):
@@ -103,7 +103,15 @@ class MulScalar(TensorOp):
 
     def compute(self, a: NDArray):
         return a * self.scalar
-    
+
+    '''
+    y = a * C
+    ∂y/∂a = C   v¯{a-y} = grad_y * C
+    C标量不反传梯度
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        return (out_grad * self.scalar,)  
+
 
 def mul_scalar(a, scalar):
     return MulScalar(scalar)(a)
@@ -260,6 +268,15 @@ def cos(a):
 class Exp(TensorOp):
     def compute(self, a):
         return array_api.exp(a)
+    
+    '''
+    y = exp(a)
+    ∂y/∂a = exp(a)    v¯{a-y} = grad_y * exp(a)  
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0]
+        return (out_grad * exp(a),)
+        # return out_grad * node #?
     
 
 def exp(a):

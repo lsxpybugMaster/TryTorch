@@ -13,4 +13,4 @@ from . import ops
 
 
 # 之后逻辑也会在导入包时自动执行
-print("Import Trytorch Success")
+# print("Import Trytorch Success")

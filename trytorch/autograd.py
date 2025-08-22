@@ -4,7 +4,7 @@ import cupy
 import trytorch
 
 # 类型约束,不仅约束容器类型,同时约束类型中类型  如List[int]
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Dict
 
 from .array_device import *
 
@@ -43,6 +43,11 @@ class Op:
     ) -> Union["Value", Tuple["Value"]]: 
         '''
         计算梯度
+        返回元组,如果不是元组,gradient_as_tuple会转换回元组 \n
+        建议实现算子时就返回元组
+        Args:
+            out_grad : 该节点梯度
+            node: 当前节点,使用node.input获取输入节点
         '''
         raise NotImplementedError()
         
@@ -103,8 +108,9 @@ class Value:
         return self.cached_data
 
 
-    # 是否为叶节点(数据入口),无op
+    
     def is_leaf(self):
+        '''是否为叶节点(数据入口), 即无op'''
         return self.op is None
     
 
@@ -286,13 +292,22 @@ class Tensor(Value):
             return data
         return data.cupy()
 
+    def size(self):
+        '''返回当前Tensor所占字节数'''
+        return self.realize_cached_data().nbytes
+    
+    @classmethod
+    def get_total_size(cls):
+        '''返回所有Tensor实例的总大小'''
+        return cls.total_size
+
     def __repr__(self):
         data: NDArray = self.realize_cached_data()
         return f"tensor({data}, dtpye={data.dtype})"
 
     __str__ = __repr__
     
-    #---------------------------实现算子调用----------------------------------------
+#-------------------------------实现算子调用----------------------------------------
     
     ##### 重载运算符
     #  +
@@ -361,3 +376,102 @@ class Tensor(Value):
     __rmul__ = __mul__
     __rsub__ = __sub__
     __rmatmul__ = __matmul__
+    
+    def topo_order(self) -> List[Value]:
+        '''
+        用于调试的函数,返回前向计算图的拓扑排序
+        '''
+        return list(find_topo_sort([self]))
+    
+
+    # 以该Tensor为入口调用compute_gradient_of_variables开始反向传播
+    def backward(self, out_grad=None):
+        # 无梯度说明是计算图的终点,grad自动初始化1
+        if out_grad is None:
+            # init 是 Trytorch的初始化辅助模块
+            out_grad = init.ones(
+                *self.shape, dtype = self.dtype, device = self.device
+            )
+        # 进行反向传播
+        compute_gradient_of_variables(self, out_grad)
+
+# Tensor类结束
+
+#-------------------------------实现反向传播----------------------------------------
+
+def compute_gradient_of_variables(output_tensor: Tensor, out_grad):
+    '''
+        梯度反向传播
+        output_tensor节点将梯度沿输入路径分流,赋予输入节点的grad中
+    '''
+
+    # Dict{节点 : 流向该节点的所有grad}
+    node_to_output_grads_list: Dict[Tensor,List[Tensor]] = {}
+    node_to_output_grads_list[output_tensor] = [out_grad]
+
+    # 反向拓扑,即反向传播的顺序,保证遍历不会乱来
+    reverse_topo_order = list(reversed(find_topo_sort([output_tensor])))
+
+
+    for node_i in reverse_topo_order:
+        # 获取所有流向该节点的grad序列
+        adjoint = node_to_output_grads_list[node_i]
+        # 🐍 Python中实例属性可以在任意位置声明
+        # 🤗 计算并保存梯度
+        node_i.grad = sum(adjoint)
+
+        # 叶节点不必在向前分发梯度
+        if node_i.is_leaf():
+            continue
+        
+        '''
+          🤗 最终的梯度反向传播
+          
+          1. 根据节点op和grad计算分流的梯度
+          2. 使用字典记录
+          3. 后续节点读取字典计算梯度,由于是按拓扑排序,可以确保遍历至对应节点时其所有输入梯度都到齐
+
+          例: 当前节点 Op = add  输入 v1 , v2
+              则返回gradv1 = grad , gradv2 = grad 并记录至字典
+        '''
+        # 按上面的例子为 [grad, grad]
+        partial_vk_to_i_list = node_i.op.gradient_as_tuple(node_i.grad, node_i)
+
+        # 填入字典
+        for node_k, partial_vk_to_i in zip(node_i.inputs, partial_vk_to_i_list):
+            node_to_output_grads_list.setdefault(node_k, list())
+            node_to_output_grads_list[node_k].append(partial_vk_to_i)  
+
+    # 🤗 for结束, 所有梯度计算完毕 
+
+##### 与图有关的辅助函数
+
+def find_topo_sort(end_node_list: List[Value]) -> List[Value]:
+    '''
+        进行拓扑排序,相当于对topo_sort_dfs进行包装
+        Args:
+            node_list: 终点节点列表,因为理论上可以支持多个计算图同时计算(目前代码暂不支持)
+        Returns:
+            topo_order: 按拓扑排序排好序的节点
+    '''
+    visited = set()
+    topo_order = []
+    topo_sort_dfs(end_node_list[-1], visited, topo_order)
+    return topo_order
+
+
+def topo_sort_dfs(node: Value, visited: set, topo_order: List[Value]):
+    '''
+        DFS 递归实现
+        得到topo_order为前向计算图的拓扑排序
+        Args:
+            node: 当前节点
+            visited: 存储所有访问过的点,便于后续查询
+            topo_order: 拓扑排序Tensor序列
+    '''
+    # 对所有前序节点进行dfs
+    for pre_node in node.inputs:
+        topo_sort_dfs(pre_node, visited, topo_order)
+    if node not in visited:
+        topo_order.append(node)
+        visited.add(node)
