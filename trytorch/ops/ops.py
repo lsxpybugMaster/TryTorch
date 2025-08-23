@@ -43,7 +43,7 @@ def add(a, b):
 
 # Tensor 加 标量    与上面相比,梯度反传不同!
 class AddScalar(TensorOp):
-    def __init__(self,scalar):
+    def __init__(self, scalar):
         self.scalar = scalar
 
     def compute(self, a: NDArray):
@@ -66,8 +66,15 @@ def add_scalar(a, scalar):
 # 减法算子直接使用add(a, -b)
 # 只需提供负号算子
 class Negate(TensorOp):
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return -a
+    '''
+    y = -a
+    ∂y/∂a = -1  v¯{a-y} = -grad_y 
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        return negate(out_grad)
+
 
 def negate(a):
     return Negate()(a)
@@ -126,8 +133,16 @@ class PowerScalar(TensorOp):
     # array_api依据a类型选择numpy OR cupy
     def compute(self, a: NDArray) -> NDArray:
         return array_api.power(a, self.scalar)
-        
     
+    '''
+    y = a ** C
+    ∂y/∂a = Ca ** (C - 1)  v¯{a-y} = grad_y * Ca ** (C - 1) 
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0]
+        return out_grad * self.scalar * power_scalar(a, self.scalar - 1)
+    
+
 def power_scalar(a, scalar):
     return PowerScalar(scalar)(a)
 
@@ -138,8 +153,17 @@ class EWiseDiv(TensorOp):
     def compute(self, a, b):
         return a / b
     
+    '''
+    y = a / b
+    ∂y/∂a = 1 / b           v¯{a-y} = grad_y * 1 / b 
+    ∂y/∂b = - a / b**2      v¯{b-y} = grad_y * (- a / b**2 ) 
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a, b = node.inputs
+        return out_grad * (power_scalar(b, -1)), out_grad * (divide(negate(a), power_scalar(b, 2)))
 
-def devide(a, b):
+
+def divide(a, b):
     return EWiseDiv()(a, b)
 
 
@@ -152,6 +176,13 @@ class DivScalar(TensorOp):
     def compute(self, a):
         return a / self.scalar
     
+    '''
+    y = a / C
+    ∂y/∂a = 1 / C           v¯{a-y} = grad_y * 1 / C 
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        return (out_grad / self.scalar,)
+
 
 def devide_scalar(a, scalar):
     return DivScalar(scalar)(a)
@@ -168,11 +199,18 @@ class Transpose(TensorOp):
         self.axis_l = list(range(a.ndim))
         # 不提供参数默认转后两维
         if self.axes is None:
-            self.axes_l[-1], self.axis_l[-2] = self.axis_l[-2], self.axis_l[-1]
+            self.axis_l[-1], self.axis_l[-2] = self.axis_l[-2], self.axis_l[-1]
         else:
             self.axis_l[self.axes[0]], self.axis_l[self.axes[1]] = self.axes[1], self.axes[0]
         
         return array_api.transpose(a, self.axis_l)
+    
+    '''
+    许多线性操作的梯度传播就是该操作的逆操作。
+    对上游梯度进行相同转置操作即实现传播
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        return transpose(out_grad, self.axes)
 
 
 def transpose(a, axes=None):
@@ -187,6 +225,14 @@ class Reshape(TensorOp):
     def compute(self, a):
         return array_api.reshape(a, self.shape)
 
+    '''
+    许多线性操作的梯度传播就是该操作的逆操作。
+    对上游梯度进行相同Reshape操作即实现传播
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0]
+        return reshape(out_grad, a.shape)
+
 
 def reshape(a, shape):
     return Reshape(shape)(a)
@@ -199,6 +245,31 @@ class BroadcastTo(TensorOp):
 
     def compute(self, a):
         return array_api.broadcast_to(a, self.shape)
+
+    '''
+    许多线性操作的梯度传播就是该操作的逆操作。
+    对上游梯度在广播增加的维度上进行求和，然后重塑回原始输入形状。
+    e.g. [1, 2] -> [1, 2]   [g1, g2] -> [g1 + g3, g2 + g4]
+                   [1, 2]   [g3, g4]
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        in_shape = node.inputs[0].shape
+        out_shape = out_grad.shape
+
+        # 对齐维度,先获取元组长度差别,再根据差别向前补1
+        diff_len = len(out_shape) - len(in_shape)
+        # 注意元组间计算直接是加形状(拼接)而非数值
+        in_shape_aligned = (1,) * diff_len + in_shape
+
+        # 寻找拼接的维度,对该维度求和
+        axes = []
+        for i, (in_dim, out_dim) in enumerate(zip(in_shape_aligned, out_shape)):
+            if in_dim == 1 and out_dim > 1:
+                axes.append(i)
+
+        grad = out_grad.sum(axes=tuple(axes))
+        # sum 可能会舍去维度, 我们手动恢复
+        return grad.reshape(in_shape)
 
 
 def broadcast_to(a, shape):
@@ -214,7 +285,36 @@ class Summation(TensorOp):
             self.axes = tuple([self.axes])
 
     def compute(self, a):
+        # numpy 默认 keepdim = False
         return array_api.sum(a, self.axes)
+    
+    '''
+    许多线性操作的梯度传播就是该操作的逆操作。
+    在反向传播时,上游梯度会被均匀分配到所有被求和的元素。
+    e.g. [1, 2, 3] => [6,    [g1, => [g1  g1  g1]
+         [4, 5, 6]     15]    g2]    [g2  g2  g2]
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        input_shape = node.inputs[0].shape
+        final_shape = list(input_shape)
+
+        # 还原被压缩的维度
+        # e.g.    sum[(2,3) axes = 1] -> (2) => (2, 1)  
+        if self.axes:
+            for dim in self.axes:
+                final_shape[dim] = 1
+        # numpy中axes = None 则求全部和并返回标量
+        # e.g.   sum[(2,3) axes = None] -> _ => (1, 1)  
+        else:
+            final_shape = [1 for _ in range(len(final_shape))]
+
+        # 完成形状转换
+        out_grad = reshape(out_grad, final_shape)
+
+        # 广播grad
+        # e.g. [g1, g2] * [1  1  1] = [g1 g1 g1]
+        #                 [1  1  1]   [g2 g2 g2]
+        return out_grad * array_api.ones(input_shape,dtype="float32",device=out_grad.device)
     
 
 def summation(a, axes=None):
@@ -227,6 +327,24 @@ class MatMul(TensorOp):
     def compute(self, a, b):
         return array_api.matmul(a, b)
     
+    '''
+    y = A @ B   
+    A: (m, k)  
+    B: (k, n) 
+    y, grad  (m, n)
+    ∂y/∂A = B^T          : (n, k)          
+    ∂y/∂B = A^T          : (k, m)      
+    gradA = grad @ B^T   : (m, k)
+    gradB = A^T  @ grad  : (k, n)
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        A, B = node.inputs
+        gradA = matmul(out_grad, transpose(B))
+        gradB = matmul(transpose(A), out_grad)
+
+
+        return gradA, gradB
+
 
 def matmul(a, b):
     return MatMul()(a, b)
