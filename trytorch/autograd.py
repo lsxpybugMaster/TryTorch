@@ -101,8 +101,11 @@ class Value:
         if self.cached_data is not None:
             return self.cached_data
         
-        # 否则需要进行计算,构建该节点到计算图中
-        # '*'用于解包列表为参数送给函数
+        '''
+           否则需要进行计算,构建该节点到计算图中
+           '*'用于解包列表为参数送给函数
+           这里传送的是NDArray,compute中利用numpy/cupy进行运算!
+        '''
         self.cached_data = self.op.compute(
             *[x.realize_cached_data() for x in self.inputs] 
         )

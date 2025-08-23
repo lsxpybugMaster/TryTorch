@@ -14,6 +14,11 @@ import cupy
     调用make_from_op -> 
     调用realize_cached_data -> 
     调用op.compute完成计算
+
+    算子书写规则:
+        前向计算,使用array_api操作NDArray
+        包装前向计算(Tensor计算)为用户接口func()
+        反向传播,使用func()计算梯度
 '''
 
 # Tensor相加
@@ -150,7 +155,7 @@ def power_scalar(a, scalar):
 
 # Tensor间除法
 class EWiseDiv(TensorOp):
-    def compute(self, a, b):
+    def compute(self, a: NDArray, b: NDArray):
         return a / b
     
     '''
@@ -173,7 +178,7 @@ class DivScalar(TensorOp):
     def __init__(self, scalar):
         self.scalar = scalar
 
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return a / self.scalar
     
     '''
@@ -194,7 +199,7 @@ class Transpose(TensorOp):
         self.axes = axes
 
     # 通过交换矩阵shape参数"实现"转秩
-    def compute(self, a):
+    def compute(self, a: NDArray):
         # 未转置时维度 [1,2,3,4]
         self.axis_l = list(range(a.ndim))
         # 不提供参数默认转后两维
@@ -222,7 +227,7 @@ class Reshape(TensorOp):
     def __init__(self, shape):
         self.shape = shape
 
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return array_api.reshape(a, self.shape)
 
     '''
@@ -243,7 +248,7 @@ class BroadcastTo(TensorOp):
     def __init__(self, shape):
         self.shape = shape
 
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return array_api.broadcast_to(a, self.shape)
 
     '''
@@ -284,7 +289,7 @@ class Summation(TensorOp):
         if isinstance(self.axes, int):
             self.axes = tuple([self.axes])
 
-    def compute(self, a):
+    def compute(self, a: NDArray):
         # numpy 默认 keepdim = False
         return array_api.sum(a, self.axes)
     
@@ -324,7 +329,7 @@ def summation(a, axes=None):
 
 # 矩阵乘法
 class MatMul(TensorOp):
-    def compute(self, a, b):
+    def compute(self, a: NDArray, b: NDArray):
         return array_api.matmul(a, b)
     
     '''
@@ -342,6 +347,11 @@ class MatMul(TensorOp):
         gradA = matmul(out_grad, transpose(B))
         gradB = matmul(transpose(A), out_grad)
 
+        # 处理广播机制带来的维度不匹配问题。
+        if gradA.shape != A.shape:
+            gradA = summation(gradA, tuple(range(len(gradA.shape) - len(A.shape))))
+        if gradB.shape != B.shape:
+            gradB = summation(gradB, tuple(range(len(gradB.shape) - len(B.shape))))
 
         return gradA, gradB
 
@@ -353,9 +363,17 @@ def matmul(a, b):
 
 # log函数
 class Log(TensorOp):
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return array_api.log(a)
     
+    '''
+    y = ln(a)  
+    ∂y/∂a = 1 / a   
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0]
+        return out_grad * power_scalar(a, -1)
+
 
 def log(a):
     return Log()(a)
@@ -364,8 +382,20 @@ def log(a):
 
 # sin函数
 class Sin(TensorOp):
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return array_api.sin(a)
+    '''
+    y = sin(a)  
+    ∂y/∂a = cos(a)   
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0]
+        '''
+            ❌ 严重错误: return out_grad * array_api.cos(a)
+            array_api是操作NDArray的,用于实现前向计算中数值的真正计算
+            进行Tensor运算,必须使用ops中封装好的函数
+        '''
+        return out_grad * cos(a)
 
 
 def sin(a):
@@ -374,18 +404,26 @@ def sin(a):
 
 
 class Cos(TensorOp):
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return array_api.cos(a)
+
+    '''
+    y = cos(a)  
+    ∂y/∂a = -sin(a) = sin(-a)
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0]
+        return out_grad * sin(negate(a))
 
 
 def cos(a):
-    return cos()(a)
+    return Cos()(a)
 
 
 
 # 自然指数函数
 class Exp(TensorOp):
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return array_api.exp(a)
     
     '''
@@ -395,7 +433,6 @@ class Exp(TensorOp):
     def gradient(self, out_grad: Tensor, node: Tensor):
         a = node.inputs[0]
         return (out_grad * exp(a),)
-        # return out_grad * node #?
     
 
 def exp(a):
@@ -413,7 +450,7 @@ class LogSumExp(TensorOp):
     def __init__(self, axes: Optional[tuple] = None):
         self.axes = axes
 
-    def compute(self, Z):
+    def compute(self, Z: NDArray):
         # 用于广播,因此保留维度
         max_Z = array_api.max(Z,axis=self.axes, keepdims=True)
         # 用于与结果相加,因此舍去维度
@@ -424,6 +461,31 @@ class LogSumExp(TensorOp):
         )
 
         return logsumexp
+    
+    '''
+    TODO: 暂时搁置这部分计算,后续弄懂
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        Z = node.inputs[0]
+        max_Z = array_api.max(Z.cached_data, axis=self.axes, keepdims=True)
+        exp_val = exp(Z - Tensor(max_Z))
+        sum_val = summation(exp_val, axes=self.axes)
+
+        log_grad = out_grad / sum_val
+        
+        input_shape = node.inputs[0].shape
+        final_shape = list(input_shape)
+        if self.axes:
+            if isinstance(self.axes, int):
+                final_shape[self.axes] = 1
+            else:
+                for dim in self.axes:
+                    final_shape[dim] = 1
+        else:
+            final_shape = [1 for _ in range(len(final_shape))]
+        sum_grad = reshape(log_grad, tuple(final_shape))
+        sum_grad_b = broadcast_to(sum_grad, Z.shape)
+        return exp_val * sum_grad_b
 
 
 def logsumexp(a, axes=None):
@@ -432,8 +494,18 @@ def logsumexp(a, axes=None):
 
 
 class ReLU(TensorOp):
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return array_api.maximum(a, 0)
+
+    '''
+    y = max(a, 0)
+    ∂y/∂a = 1  (a > 0) 
+          = 0  (a <= 0)
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0]
+        dReLU = array_api.where(a.cached_data > 0, 1.0, 0.0).astype("float32")
+        return out_grad * dReLU
 
 
 def relu(a):
@@ -442,8 +514,16 @@ def relu(a):
 
 
 class Sigmoid(TensorOp):
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return 1 / (1 + array_api.exp(-a))
+    
+    '''
+    y = sig(a)
+    ∂y/∂a = sig(a)(1 - sig(a))       
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0]
+        return out_grad * sigmoid(a) * (1 - sigmoid(a))
     
 
 def sigmoid(a):
@@ -452,8 +532,16 @@ def sigmoid(a):
 
 
 class Tanh(TensorOp):
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return array_api.tanh(a)
+    
+    '''
+    y = tanh(a)
+    ∂y/∂a = 1 - tanh(a)**2
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0]
+        return out_grad * (1 + (-tanh(a) ** 2))
 
 
 def tanh(a):
@@ -465,8 +553,15 @@ class Flip(TensorOp):
     def __init__(self, axes: Optional[tuple] = None):
         self.axes = axes
 
-    def compute(self, a):
+    def compute(self, a: NDArray):
         return array_api.flip(a, self.axes)
+    
+    '''
+    许多线性操作的梯度传播就是该操作的逆操作。
+    直接将梯度翻转即可
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        return flip(out_grad, self.axes)
     
 
 def flip(a, axes):

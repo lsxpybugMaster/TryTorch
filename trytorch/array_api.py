@@ -164,7 +164,15 @@ class array_api:
     @staticmethod
     def zeros(shape, dtype = "float32", device = cpu()):
         return array_api._backend_from_device(device).zeros(shape, dtype=dtype)
-
+    
+    @staticmethod 
+    def arange(start, stop=None, step=1, dtype="float32", device=cpu()):
+        api = array_api._backend_from_device(device)
+        if stop is None:
+            return api.arange(start, dtype=dtype)
+        else: 
+            return api.arange(start, stop, step, dtype)
+ 
     @staticmethod
     def rand(*shape, device = cpu()):
         return array_api._backend_from_device(device).random.rand(*shape)
