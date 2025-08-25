@@ -131,3 +131,7 @@ def _child_modules(value: object) -> List["Module"]:
         return []
 
 #------------------------------------实际模块定义部分-----------------------------
+
+class Identity(Module):
+    def forward(self, x):
+        return x
