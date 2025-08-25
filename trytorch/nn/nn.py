@@ -135,3 +135,100 @@ def _child_modules(value: object) -> List["Module"]:
 class Identity(Module):
     def forward(self, x):
         return x
+    
+
+
+class Linear(Module):
+    
+    def __init__(
+        self, 
+        in_features, 
+        out_features,
+        bias = True,
+        device = None,
+        dtype = "float32"
+    ):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        # Parameter即需要更新参数的Tensor
+        self.weight = Parameter(
+            init.kaiming_uniform(in_features,out_features,device=device,dtype=dtype)
+        )        
+
+        # b已经自动被转置了,无需再转置
+        self.bias = Parameter(
+            ops.transpose(init.kaiming_uniform(out_features, 1, device=device, dtype=dtype))
+        ) if bias else None
+
+
+    '''
+        Y = X @ W + B     b : (1, out_features) => B : (n, out_features)
+    '''
+    def forward(self, X: Tensor) -> Tensor:
+        Y = ops.matmul(X, self.weight)
+        if self.bias:
+            bias += ops.broadcast_to(self.bias, Y.shape)
+            Y += bias
+        return Y
+
+
+
+class Flatten(Module):
+    def forward(self, X: Tensor):
+        # (batch,f1,f2,f3) => (batch,f1 * f2 * f3)
+        return ops.reshape(X, (X.shape[0],-1))
+    
+
+
+class ReLU(Module):
+    def forward(self, x: Tensor) -> Tensor:
+        return ops.relu(x)
+    
+
+
+class Sequential(Module):
+    '''
+        存储一系列顺序计算的模块,一次前向调用计算完毕
+    '''
+    def __init__(self, *modules):
+        super().__init__()
+        self.modules = modules
+
+    def forward(self, x: Tensor) -> Tensor:
+        for module in self.modules:
+            x = module(x)
+        return x
+    
+
+
+'''
+    合并简化(Softmax + 交叉熵损失)
+    CrossEntropy = -sum(ylog(p)) ==> -log(q_k)
+    z_k 来自 logit, 需经过如下 Softmax:
+    q_k = Softmax(z_k) = e**z_k / sum(e**i)
+    合并带入:
+        Loss = -log(q_k)
+             = -log(e**z_k / sum(e**i))
+             = -(log(e**z_k)) - logsum(e**i))
+             = -(z_k - logsum)
+             = logsum - z_k
+'''
+class SoftmaxLoss(Module):
+    def forward(self, logits: Tensor, y: Tensor):
+        '''
+            logits:  (batch, embed)  embed维数与类别相同
+        '''
+        batch_size = logits.shape[0]
+        classes = logits.shape[1]
+        # logsum
+        normalize_x = ops.logsumexp(logits, axes=1)
+        
+        y_one_hot = init.one_hot(classes, y, device=y.device)
+       
+        # 提取出Z_y (即上面的z_k的向量形式,包含所有对应真实标签位置的logit值)
+        Z_y = ops.summation(logits * y_one_hot, axes=1)
+
+        loss = ops.summation(normalize_x - Z_y)
+
+        return loss / batch_size
