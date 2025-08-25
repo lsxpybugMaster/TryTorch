@@ -189,7 +189,7 @@ class DivScalar(TensorOp):
         return (out_grad / self.scalar,)
 
 
-def devide_scalar(a, scalar):
+def divide_scalar(a, scalar):
     return DivScalar(scalar)(a)
 
 
