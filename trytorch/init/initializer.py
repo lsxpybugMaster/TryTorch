@@ -50,6 +50,9 @@ def zeros(*shape, **kwargs):
 
 # 装饰器仅支持装饰返回float32类型的Tensor,randb返回bool型,因此无法使用装饰器
 def randb(*shape, p=0.5, device=None, dtype="bool", requires_grad=False):
+    '''
+        以p的概率生成True或1,取决于dtype(默认bool)
+    '''
     device = torch.cpu() if device is None else device
     array = array_api.rand(*shape, device=device) <= p
     return torch.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
