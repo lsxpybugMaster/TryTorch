@@ -9,10 +9,11 @@ from .autograd import *
 from .array_device import *
 from .optim import *
 
-# 
+# 将子文件中子包暴露
 from . import ops
+from . import nn
 from . import init
-
+from . import datas
 
 # 之后逻辑也会在导入包时自动执行
 # print("Import Trytorch Success")
