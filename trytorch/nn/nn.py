@@ -168,7 +168,7 @@ class Linear(Module):
     def forward(self, X: Tensor) -> Tensor:
         Y = ops.matmul(X, self.weight)
         if self.bias:
-            bias += ops.broadcast_to(self.bias, Y.shape)
+            bias = ops.broadcast_to(self.bias, Y.shape)
             Y += bias
         return Y
 

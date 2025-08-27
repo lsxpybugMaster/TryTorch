@@ -128,8 +128,18 @@ class Value:
         cached_data: List[object] = None,
         requires_grad: Optional[bool] = None
     ):
+        
         if requires_grad is None:
             requires_grad = any(x.requires_grad for x in inputs)
+
+        '''
+            🔥 这里增加对全局开关的检查
+            使用with trytorch.no_grad() 时,内部会将is_grad_enabled() 返回 False
+            从而禁止梯度计算
+        '''
+        from .autograd import is_grad_enabled
+        requires_grad = requires_grad and is_grad_enabled()
+
         # 以下是真正变量！
         self.op = op
         self.inputs = inputs
@@ -483,3 +493,37 @@ def topo_sort_dfs(node: Value, visited: set, topo_order: List[Value]):
     if node not in visited:
         topo_order.append(node)
         visited.add(node)
+
+
+# ----------------------------------------- 全局梯度开关 ----------------------------------
+'''
+    NOTE: 测试版
+    类似with torch.no_grad()
+'''
+_grad_enabled: bool = True   # 默认开启梯度追踪
+
+
+def is_grad_enabled() -> bool:
+    """返回当前是否启用梯度计算"""
+    global _grad_enabled
+    return _grad_enabled
+
+def set_grad_enabled(mode: bool):
+    """手动开关梯度计算，等价于 PyTorch 的 torch.set_grad_enabled"""
+    global _grad_enabled
+    _grad_enabled = mode
+
+
+class no_grad:
+    """上下文管理器：禁用梯度计算"""
+    def __enter__(self):
+        global _grad_enabled
+        self.prev = _grad_enabled
+        _grad_enabled = False
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        global _grad_enabled
+        _grad_enabled = self.prev
+
+

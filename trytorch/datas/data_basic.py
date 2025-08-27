@@ -100,6 +100,6 @@ class DataLoader:
     
     def __len__(self):
         '''
-            返回batch大小
+            返回batch个数
         '''
-        return len(self.ordering)
+        return (len(self.dataset) + self.batch_size - 1) // self.batch_size
