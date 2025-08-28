@@ -1,7 +1,7 @@
 from typing import Optional, Union
 from ..autograd import Tensor, TensorOp
 from ..array_api import array_api, NDArray
-from ..array_device import cpu, gpu
+from ..array_device import get_device_by_data
 import numpy
 import cupy
 
@@ -41,7 +41,7 @@ class EWiseAdd(TensorOp):
 EWiseAdd().__call__().make_from_op().realize_cached_data().compute()
 '''
 # 直观的用户接口
-def add(a, b):
+def add(a: Tensor, b: Tensor):
     return EWiseAdd()(a, b)
     
 
@@ -572,3 +572,100 @@ def flip(a, axes):
 def compact(array):
     out_array = array.copy()
     return out_array
+
+
+
+#---------------------------卷积相关算子--------------------------
+
+class Dilate(TensorOp):
+    '''
+        在矩阵元素之间补充零,该操作在利用反卷积进行反向传播时出现
+        Args:
+            axes: 需要补充0的维度 
+            dilation: 元素之间补充0的个数
+    '''
+    def __init__(self, axes: tuple, dilation: int):
+        self.axes = axes
+        self.dilation = dilation
+
+
+    def compute(self, a: NDArray):
+        shape = a.shape
+        out_shape = list(shape)
+        
+        # 🐍 在Python里,slice是一个内置类,表示切片操作。 2:10:2 等价于 slice(2,10,2)
+        # 初始先默认切片切完所有数据 slices = [slice(0, shape[0], None), ...]
+        slices = [slice(0, out_shape[idx]) for idx in range(len(shape))]
+
+        for ax in self.axes:
+            if ax >= len(out_shape):
+                continue
+            # 膨胀对应维度
+            out_shape[ax] = out_shape[ax] * (1 + self.dilation)
+            # 那么该维度的切片需要增加步长: slice(0, shape[ax]) => slice(0, shape[ax], 1 + dilation) 实现跳步切片
+            slices[ax] = slice(0, out_shape[ax], 1 + self.dilation)
+        
+        # 调用array_device模块下函数确定device
+        device = get_device_by_data(a)
+
+        # 预先构建膨胀后的全0矩阵
+        out_tensor = array_api.zeros(out_shape, dtype="float32", device=device)
+
+        # 使用切片索引复制数组a到正确位置
+        out_tensor[tuple(slices)] = a
+        return out_tensor
+    
+    '''
+    许多线性操作的梯度传播就是该操作的逆操作。
+    对上游梯度进行相同转置操作即实现传播
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        out_grad = undilate(out_grad, self.axes, self.dilation)
+        return out_grad
+
+
+def dilate(a, axes: tuple, dilation: int):
+    return Dilate(axes, dilation)(a)
+        
+
+
+class UnDilate(TensorOp):
+    
+    def __init__(self, axes: tuple, dilation: int):
+        self.axes = axes
+        self.dilation = dilation
+
+    def compute(self, a: NDArray):
+
+        shape = a.shape
+        
+        # 默认先进行完整切片
+        slices = [slice(0, shape[idx]) for idx in range(len(shape))]
+    
+        for ax in self.axes:
+            if ax >= len(shape):
+                continue
+            
+            # 原来写成了slice导致错误,注意变量的拼写!
+            slices[ax] = slice(0, shape[ax], 1 + self.dilation)
+        
+        # 反向操作时切片就是对应的值
+        # compact确保切片后数据在内存中连续
+        return compact(a[tuple(slices)])
+    
+    '''
+    许多线性操作的梯度传播就是该操作的逆操作。
+    对上游梯度进行相同转置操作即实现传播
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        out_grad = dilate(out_grad, self.axes, self.dilation)
+        return out_grad
+
+
+def undilate(a, axes: tuple, dilation: int):
+    return UnDilate(axes, dilation)(a)
+
+
+
+
+

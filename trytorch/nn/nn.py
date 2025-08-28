@@ -253,7 +253,7 @@ class BatchNorm1d(Module):
         self.running_mean = init.zeros(self.dim, device=device, dtype=dtype)
         self.running_var  = init.ones(self.dim, device=device, dtype=dtype)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         # x : (b, features = self.dim)
         batch_size = x.shape[0]
 
@@ -274,7 +274,33 @@ class BatchNorm1d(Module):
         #  y = γ*x_n + β
         return x_normed * self.weight + self.bias
 
-        
+
+
+class BatchNorm2d(BatchNorm1d):
+    '''
+        对每个通道独立地进行标准化
+        用于卷积的BatchNorm
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, x: Tensor):
+        # x: (n, c, h, w) 
+        s = x.shape
+        # _x: (n, c, h, w) -> (n, h, c, w) -> (n, h, w, c) -> (n * h * w, c)
+        _x = x.transpose((1, 2)).transpose((2, 3)).reshape(
+            (s[0] * s[2] * s[3], s[1])
+        )
+        '''
+            进行reshape后执行BatchNorm1d
+            BatchNorm1d: (n, features)
+            BatchNorm2d: (n, c, h, w) => (n*c*w , channels)
+        '''
+        y = super().forward(_x).reshape((s[0], s[2], s[3], s[1]))
+        return y.transpose((2, 3)).transpose((1, 2))
+
+
+
 '''
     以概率p将输入值清零
     输出放大: x = x / (1 - p)

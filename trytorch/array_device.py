@@ -1,6 +1,7 @@
 '''
 定义设备类型
 '''
+import numpy
 import cupy
 
 # 虚基类
@@ -41,5 +42,19 @@ class GPUDevice(Device):
         else:
             print("GPU is not available")
 
+
 def gpu():
     return GPUDevice()
+
+
+
+def get_device_by_data(data):
+    '''
+        根据数据获取当前的device
+    '''
+    if isinstance(data, (numpy.generic, numpy.ndarray)):
+        return cpu()
+    elif isinstance(data, (cupy.generic, cupy.ndarray)):
+        return gpu()
+    else:
+        raise ValueError(f"Unknown array types: {type(data).__module__}")
