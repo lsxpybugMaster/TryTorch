@@ -666,6 +666,124 @@ def undilate(a, axes: tuple, dilation: int):
     return UnDilate(axes, dilation)(a)
 
 
+# 卷积算子
+class Conv(TensorOp):
+    
+    def __init__(self, stride: Optional[int] = 1, padding: Optional[int] = 0):
+        self.stride = stride
+        self.padding = padding
+
+   
+    def compute(self, X: NDArray, W: NDArray):
+        '''
+            X: 特征图 (N, H , W, C)
+            W: 卷积核 (K, _ , C_in, C_out)
+            使用 img2col 将 X, W 重组
+            Y = X @ W 
+        '''
+
+        N, _H, _W, C_in  = X.shape
+        # (卷积核大小, _ , 输入通道数, 输出通道数)
+        K, _,  I, C_out = W.shape  
+
+        assert C_in == I, "卷积核的输入通道与特征图的通道数不匹配!"
+
+        # 仅在H, W维度做padding
+        pad_width = [
+            (0,0),    
+            (self.padding, self.padding),
+            (self.padding, self.padding),
+            (0,0),
+        ]
+        # 得到padding后的特征图X
+        X_pad = array_api.pad(X, pad_width, mode='constant', constant_values = 0) if self.padding > 0 else X
+
+        '''
+            img2col
+            涉及多通道,多卷积核时:
+            特征图通道横向拼接
+            卷积核个数纵向拼接
+        '''
+        # 计算卷积核展开后的第一维度,即卷积核大小(K * K)与输入通道数 
+        inner_dim = K * K * C_in
+        
+        # 获取padding的步幅, 步幅是一个元组，表示在内存中沿着每个维度前进一个元素时需要跳过的字节数。它描述了张量在内存中的布局方式
+        Ns, Hs, Ws, Cs = X_pad.strides
+        
+        # 使用公式计算输出特征图的维度
+        H_out = (_H - K + 2 * self.padding) // self.stride + 1
+        W_out = (_W - K + 2 * self.padding) // self.stride + 1
+        
+        '''
+            使用as_strided展开特征图
+            as_strided不复制数据,而是通过改变对现有内存的解释方式来创建新的张量视图。
+            shape 指定对该数据的解释方式
+            strides 指定每次切换下一个数据时的步幅(与卷积步幅区分!)
+        '''
+        _X = array_api.as_strided(
+            X_pad,
+            shape = (N, H_out, W_out, K, K, C_in), # 创建所有可能的卷积窗口
+            strides=(Ns, Hs*self.stride, Ws*self.stride, Hs, Ws, Cs) # 卷积核移动有步长,所以其中两维是需要额外计算步长的
+        ) 
+
+    
+        _X_ = compact(_X).reshape((-1, inner_dim))
+        
+        _W_ = compact(W).reshape((-1, C_out))
+
+        out = _X_ @ _W_
+
+        return out.reshape((N, H_out, W_out, C_out))
+
+
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        '''
+            卷积反向传播:反卷积公式      
+        '''
+        X, W = node.inputs
+
+
+        '''
+            对 X 的导数 (用于链接梯度的反向传播)
+            δx = pad(dilate(δz)) * rotate180(W)
+        '''
+        # padding部分已内置在conv中,所以先dilate
+        
+        # grad: (N, H, W, C)
+        grad_dilate = dilate(out_grad, (1,2), self.stride - 1)
+
+        # W: (K, K, Cin, Cout)
+        W_r180 = flip(W, (0,1))
+
+        W_r180_T = transpose(W_r180)
+
+        K = W_r180.shape(0)
+        
+        # 反卷积
+        grad_X = conv(grad_dilate, W_r180_T, 1, K - 1 - self.padding)
+
+
+        '''
+            对 W 的导数 (用于更新参数)
+            δw = X * dilate(δz)
+        '''
+        # grad: (N, H, W, C) -> (W, H, N, C) -> (H, W, N, C)
+        grad_dilate = grad_dilate.transpose((0, 2)).transpose((0, 1))
+        
+        # X : (N, H, W, C) -> (W, H, N, C)
+        X_t = transpose(X, (0, 3))
+
+        # 反卷积
+        grad_W = conv(X_t, grad_dilate, 1, self.padding)
+
+        grad_W = grad_W.transpose((0, 2)).transpose((0, 1))
+
+        return Tensor(grad_X), grad_W
+
+
+
+def conv(a, b, stride=1, padding=1):
+    return Conv(stride,padding)(a, b)
 
 
 

@@ -333,3 +333,107 @@ class Residual(Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return x + self.fn(x) 
+    
+
+#------------------------------卷积部分模块------------------------------
+
+class Conv(Module):
+    '''
+        X: (N, C, H, W) -> (N, C, H, W)
+        W: (K, K, Cin, Cout)
+    '''
+    def __init__(
+        self, 
+        in_channels, 
+        out_channels, 
+        kernel_size, 
+        stride = 1,
+        bias = True,
+        device = None,
+        dtype = "float32",
+    ):
+        super().__init__()
+        if isinstance(kernel_size, tuple):
+            kernel_size = kernel_size[0]
+        if isinstance(stride, tuple):
+            stride = stride[0]
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.device = device
+        self.dtype  = dtype
+
+        # 由核大小推断padding
+        self.padding = self.kernel_size // 2
+
+        # kernel: (K, K, Cin, Cout)
+        self.weight = Parameter(
+            init.kaiming_uniform(
+                kernel_size * kernel_size * in_channels,
+                kernel_size * kernel_size * out_channels,
+                shape  = [kernel_size, kernel_size, in_channels, out_channels],
+                dtype  = dtype,
+                device = device
+            )
+        )
+
+        self.bias = None
+        if bias:
+            # 计算卷积核参数初始化的均匀分布范围
+            prob = 1.0 / (in_channels * kernel_size ** 2) ** 0.5
+            self.bias = Parameter(
+                init.rand(
+                    out_channels,
+                    low  = -prob,
+                    high = prob,
+                    device = device,
+                    dtype = dtype
+                )
+            )
+
+    
+    def forward(self, x: Tensor) -> Tensor:
+        # nn.Conv    (N, C, H, W)
+        # ops.Conv   (N, H, W, C)
+
+        # (N, C, H, W) -> (N, C, W, H) -> (N, H, W, C)
+        x = ops.transpose(ops.transpose(x),(1, 3))
+
+        x = ops.conv(x, self.weight, stride=self.stride, padding=self.padding)
+
+        if self.bias is not None:
+            x = x + ops.broadcast_to(self.bias, x.shape)
+
+        x = ops.transpose(ops.transpose(x,(1, 3)))
+
+        return x
+    
+
+
+class ConvBN(Module):
+    '''
+        封装: Conv2d + BatchNorm2d + ReLU
+    '''
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride = 1,
+        bias = True,
+        device = None,
+        dtype = "float32",
+    ):
+        super().__init__()
+        self.conv = Conv(in_channels,out_channels,kernel_size,stride,bias,device,dtype)
+        self.bn = BatchNorm2d(out_channels, device=device, dtype = dtype)
+        self.relu = ReLU()        
+
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.relu(self.bn(self.conv(x)))
+
+    
+
