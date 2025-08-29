@@ -90,6 +90,9 @@ class DataLoader:
     
 
     def __next__(self):
+        '''
+            self.ordering :: [array(0,1,2,3), array(4,5,6,7), array(8,9)]
+        '''
         if self.idx < len(self.ordering):
             data = self.dataset[self.ordering[self.idx]]
             self.idx += 1

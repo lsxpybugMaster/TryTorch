@@ -1,7 +1,7 @@
 from typing import Optional, Union
 from ..autograd import Tensor, TensorOp
 from ..array_api import array_api, NDArray
-from ..array_device import get_device_by_data
+from ..array_device import get_device_by_data, cpu, gpu
 import numpy
 import cupy
 
@@ -21,6 +21,7 @@ import cupy
         反向传播,使用func()计算梯度
 '''
 
+# TODO: 目前算子不支持自动广播,因为广播后梯度反传时也需反向广播,需要手动处理!
 # Tensor相加
 class EWiseAdd(TensorOp):
     # 实现Value类的compute
@@ -219,6 +220,9 @@ class Transpose(TensorOp):
 
 
 def transpose(a, axes=None):
+    '''
+        axes不提供默认转后两维
+    '''
     return Transpose(axes)(a)
 
 
@@ -666,6 +670,7 @@ def undilate(a, axes: tuple, dilation: int):
     return UnDilate(axes, dilation)(a)
 
 
+
 # 卷积算子
 class Conv(TensorOp):
     
@@ -676,7 +681,7 @@ class Conv(TensorOp):
    
     def compute(self, X: NDArray, W: NDArray):
         '''
-            X: 特征图 (N, H , W, C)
+            X: 特征图 (N, H, W, C)
             W: 卷积核 (K, _ , C_in, C_out)
             使用 img2col 将 X, W 重组
             Y = X @ W 
@@ -742,7 +747,6 @@ class Conv(TensorOp):
         '''
         X, W = node.inputs
 
-
         '''
             对 X 的导数 (用于链接梯度的反向传播)
             δx = pad(dilate(δz)) * rotate180(W)
@@ -753,11 +757,10 @@ class Conv(TensorOp):
         grad_dilate = dilate(out_grad, (1,2), self.stride - 1)
 
         # W: (K, K, Cin, Cout)
-        W_r180 = flip(W, (0,1))
-
+        W_r180 : Tensor = flip(W, (0,1))
         W_r180_T = transpose(W_r180)
 
-        K = W_r180.shape(0)
+        K = W_r180.shape[0]
         
         # 反卷积
         grad_X = conv(grad_dilate, W_r180_T, 1, K - 1 - self.padding)
@@ -779,11 +782,121 @@ class Conv(TensorOp):
         grad_W = grad_W.transpose((0, 2)).transpose((0, 1))
 
         return Tensor(grad_X), grad_W
-
-
+    
 
 def conv(a, b, stride=1, padding=1):
     return Conv(stride,padding)(a, b)
+
+# class Dilate(TensorOp):
+#     def __init__(self, axes: tuple, dilation: int):
+#         self.axes = axes
+#         self.dilation = dilation
+
+#     def compute(self, a):
+#         shape = a.shape
+#         out_shape = list(shape)
+#         slices = [slice(0, out_shape[idx]) for idx in range(len(shape))]
+#         for ax in self.axes:
+#             if ax >= len(out_shape):
+#                 continue
+#             out_shape[ax] = out_shape[ax] * (1 + self.dilation)
+#             slices[ax] = slice(0, out_shape[ax], 1 + self.dilation)
+#         if isinstance(a, (numpy.generic,numpy.ndarray)):
+#             device = cpu()
+#         elif isinstance(a, (cupy.generic,cupy.ndarray)):
+#             device =  gpu()
+#         out_tensor = array_api.zeros(out_shape, dtype = "float32", device = device) 
+#         # 使用切片索引将输入数组 a 复制到 out_tensor 中指定的位置
+#         out_tensor[tuple(slices)] = a
+#         return out_tensor
+
+#     def gradient(self, out_grad, node):
+#         out_grad = undilate(out_grad, self.axes, self.dilation)
+#         return out_grad
+
+# def dilate(a, axes, dilation):
+#     return Dilate(axes, dilation)(a)
+
+
+
+# class UnDilate(TensorOp):
+#     def __init__(self, axes: tuple, dilation: int):
+#         self.axes = axes
+#         self.dilation = dilation
+
+#     def compute(self, a):
+#         shape = a.shape
+#         slices = [slice(0, shape[idx]) for idx in range(len(shape))]
+#         for ax in self.axes:
+#             if ax >= len(shape):
+#                 continue
+#             slices[ax] = slice(0, shape[ax], 1 + self.dilation)
+#         return compact(a[tuple(slices)])
+
+#     def gradient(self, out_grad, node):
+#         out_grad = dilate(out_grad, self.axes, self.dilation)
+#         return out_grad
+
+
+# def undilate(a, axes, dilation):
+#     return UnDilate(axes, dilation)(a)
+
+# class Conv(TensorOp):
+#     def __init__(self, stride: Optional[int] = 1, padding: Optional[int] = 0):
+#         self.stride = stride
+#         self.padding = padding
+
+#     def compute(self, A, B):
+#         N, H, W, C_in = A.shape
+#         K, _, I, C_out = B.shape
+#         assert C_in == I, "input tensor shape and kernel dosen't match"
+        
+#         pad_width = [(0, 0),
+#                     (self.padding, self.padding),
+#                     (self.padding, self.padding),
+#                     (0, 0)]
+#         _A = array_api.pad(A, pad_width, mode='constant', constant_values=0) if self.padding > 0 else A
+
+#         inner_dim = K * K * C_in
+#         Ns, Hs, Ws, Cs = _A.strides
+#         H_out = (H - K + 2 * self.padding) // self.stride + 1
+#         W_out = (W - K + 2 * self.padding) // self.stride + 1
+
+#         _A = array_api.as_strided(
+#             _A,
+#             shape=(N, H_out, W_out, K, K, C_in),
+#             strides=(Ns, Hs*self.stride, Ws*self.stride, Hs, Ws, Cs)
+#         )
+#         _A_ = compact(_A).reshape((-1, inner_dim))
+#         _B_ = compact(B).reshape((-1, C_out))
+#         # print(_A_.sum())
+#         # print(_B_.sum())
+#         out = _A_ @ _B_
+#         # print(out.sum())
+#         return out.reshape((N, H_out, W_out, C_out))
+    
+#     def gradient(self, out_grad: Tensor, node: Tensor):
+#         input, weight = node.inputs
+
+#         #对input的导数
+#         #根据原理图，需要先padding一圈，但是我们的conv自带了这个操作，所以先考虑dilate操作
+#         # N H W C 所以是 1, 2 轴
+#         grad_dilate = dilate(out_grad,(1, 2), self.stride - 1)
+#         weight_r180 = flip(weight, (0, 1))
+#         weight_t = transpose(weight_r180)
+#         K = weight_r180.shape[0]
+#         grad_input = conv(grad_dilate, weight_t, 1, K - 1 - self.padding)
+
+#         #对W的导数 需要更换索引顺序
+#         grad_dilate = grad_dilate.transpose((0, 2)).transpose((0, 1))
+#         input_t = transpose(input,(0,3))
+#         grad_weight = conv(input_t, grad_dilate, 1, self.padding)
+#         grad_weight = grad_weight.transpose((0, 2)).transpose((0, 1))
+
+#         return Tensor(grad_input), grad_weight
+
+
+
 
 
 

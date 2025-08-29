@@ -253,26 +253,33 @@ class BatchNorm1d(Module):
         self.running_mean = init.zeros(self.dim, device=device, dtype=dtype)
         self.running_var  = init.ones(self.dim, device=device, dtype=dtype)
 
+
     def forward(self, x: Tensor) -> Tensor:
         # x : (b, features = self.dim)
         batch_size = x.shape[0]
+        dim = x.shape[1]
 
         mean = x.sum((0,)) / batch_size
-        var = ((x - mean) ** 2).sum((0,)) / batch_size
+
+        # x - mean
+        x_minus_mean = x - mean.reshape((1, dim)).broadcast_to(x.shape)   
+        var = (x_minus_mean ** 2).sum((0,)) / batch_size
 
         if self.training:
-            self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * mean
-            self.running_var  = (1 - self.momentum) * self.running_var  + self.momentum * var
+            self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * mean.data
+            self.running_var  = (1 - self.momentum) * self.running_var  + self.momentum * var.data
+            
             #  x_n = (x - μ) / sqrt(σ**2 + ε)
-            x_normed = (x - mean) / (var + self.eps) ** 0.5
+            x_std = ((var + self.eps) ** 0.5).reshape((1, dim)).broadcast_to(x.shape)
+            x_normed = x_minus_mean / x_std          
 
         # 测试时使用动量机制
         else:
             # x_n = (x - I_mean) / sqrt(I_std ** 2 + ε)
-            x_normed = (x - self.running_mean) / (self.running_var + self.eps) ** 0.5
+            x_normed = (x - self.running_mean.reshape((1, self.dim)).broadcast_to(x.shape)) / (self.running_var.reshape((1, self.dim)).broadcast_to(x.shape) + self.eps) ** 0.5
 
         #  y = γ*x_n + β
-        return x_normed * self.weight + self.bias
+        return x_normed * self.weight.reshape((1, self.dim)).broadcast_to(x.shape) + self.bias.reshape((1, self.dim)).broadcast_to(x.shape)
 
 
 
@@ -436,4 +443,3 @@ class ConvBN(Module):
         return self.relu(self.bn(self.conv(x)))
 
     
-
