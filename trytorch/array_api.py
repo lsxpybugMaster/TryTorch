@@ -54,6 +54,10 @@ class array_api:
         return array_api._backend_from_array(condition).where(condition, x, y)
 
     @staticmethod
+    def argmax(a, axes=None):
+        return array_api._backend_from_array(a).argmax(a, axis=axes)
+
+    @staticmethod
     def multiply(a, b):
         return array_api._backend_from_array(a).multiply(a, b)
     
@@ -165,6 +169,10 @@ class array_api:
     def zeros(shape, dtype = "float32", device = cpu()):
         return array_api._backend_from_device(device).zeros(shape, dtype=dtype)
     
+    @staticmethod
+    def zeros_like(a, dtype = "float32"):
+        return array_api._backend_from_array(a).zeros_like(a, dtype=dtype)
+
     @staticmethod 
     def arange(start, stop=None, step=1, dtype="float32", device=cpu()):
         api = array_api._backend_from_device(device)

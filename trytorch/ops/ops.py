@@ -222,6 +222,7 @@ class Transpose(TensorOp):
 def transpose(a, axes=None):
     '''
         axes不提供默认转后两维
+        目前仅支持两维交换
     '''
     return Transpose(axes)(a)
 
@@ -673,7 +674,10 @@ def undilate(a, axes: tuple, dilation: int):
 
 # 卷积算子
 class Conv(TensorOp):
-    
+    '''
+        (N, H, W, C) 格式更易于计算反向传播
+    '''
+
     def __init__(self, stride: Optional[int] = 1, padding: Optional[int] = 0):
         self.stride = stride
         self.padding = padding
@@ -787,116 +791,154 @@ class Conv(TensorOp):
 def conv(a, b, stride=1, padding=1):
     return Conv(stride,padding)(a, b)
 
-# class Dilate(TensorOp):
-#     def __init__(self, axes: tuple, dilation: int):
-#         self.axes = axes
-#         self.dilation = dilation
-
-#     def compute(self, a):
-#         shape = a.shape
-#         out_shape = list(shape)
-#         slices = [slice(0, out_shape[idx]) for idx in range(len(shape))]
-#         for ax in self.axes:
-#             if ax >= len(out_shape):
-#                 continue
-#             out_shape[ax] = out_shape[ax] * (1 + self.dilation)
-#             slices[ax] = slice(0, out_shape[ax], 1 + self.dilation)
-#         if isinstance(a, (numpy.generic,numpy.ndarray)):
-#             device = cpu()
-#         elif isinstance(a, (cupy.generic,cupy.ndarray)):
-#             device =  gpu()
-#         out_tensor = array_api.zeros(out_shape, dtype = "float32", device = device) 
-#         # 使用切片索引将输入数组 a 复制到 out_tensor 中指定的位置
-#         out_tensor[tuple(slices)] = a
-#         return out_tensor
-
-#     def gradient(self, out_grad, node):
-#         out_grad = undilate(out_grad, self.axes, self.dilation)
-#         return out_grad
-
-# def dilate(a, axes, dilation):
-#     return Dilate(axes, dilation)(a)
 
 
-
-# class UnDilate(TensorOp):
-#     def __init__(self, axes: tuple, dilation: int):
-#         self.axes = axes
-#         self.dilation = dilation
-
-#     def compute(self, a):
-#         shape = a.shape
-#         slices = [slice(0, shape[idx]) for idx in range(len(shape))]
-#         for ax in self.axes:
-#             if ax >= len(shape):
-#                 continue
-#             slices[ax] = slice(0, shape[ax], 1 + self.dilation)
-#         return compact(a[tuple(slices)])
-
-#     def gradient(self, out_grad, node):
-#         out_grad = dilate(out_grad, self.axes, self.dilation)
-#         return out_grad
-
-
-# def undilate(a, axes, dilation):
-#     return UnDilate(axes, dilation)(a)
-
-# class Conv(TensorOp):
-#     def __init__(self, stride: Optional[int] = 1, padding: Optional[int] = 0):
-#         self.stride = stride
-#         self.padding = padding
-
-#     def compute(self, A, B):
-#         N, H, W, C_in = A.shape
-#         K, _, I, C_out = B.shape
-#         assert C_in == I, "input tensor shape and kernel dosen't match"
-        
-#         pad_width = [(0, 0),
-#                     (self.padding, self.padding),
-#                     (self.padding, self.padding),
-#                     (0, 0)]
-#         _A = array_api.pad(A, pad_width, mode='constant', constant_values=0) if self.padding > 0 else A
-
-#         inner_dim = K * K * C_in
-#         Ns, Hs, Ws, Cs = _A.strides
-#         H_out = (H - K + 2 * self.padding) // self.stride + 1
-#         W_out = (W - K + 2 * self.padding) // self.stride + 1
-
-#         _A = array_api.as_strided(
-#             _A,
-#             shape=(N, H_out, W_out, K, K, C_in),
-#             strides=(Ns, Hs*self.stride, Ws*self.stride, Hs, Ws, Cs)
-#         )
-#         _A_ = compact(_A).reshape((-1, inner_dim))
-#         _B_ = compact(B).reshape((-1, C_out))
-#         # print(_A_.sum())
-#         # print(_B_.sum())
-#         out = _A_ @ _B_
-#         # print(out.sum())
-#         return out.reshape((N, H_out, W_out, C_out))
+class Max(TensorOp):
     
-#     def gradient(self, out_grad: Tensor, node: Tensor):
-#         input, weight = node.inputs
+    def __init__(self, axes: Optional[tuple] = None):
+        self.axes = axes
+        if isinstance(self.axes, int):
+            self.axes = tuple([self.axes])
 
-#         #对input的导数
-#         #根据原理图，需要先padding一圈，但是我们的conv自带了这个操作，所以先考虑dilate操作
-#         # N H W C 所以是 1, 2 轴
-#         grad_dilate = dilate(out_grad,(1, 2), self.stride - 1)
-#         weight_r180 = flip(weight, (0, 1))
-#         weight_t = transpose(weight_r180)
-#         K = weight_r180.shape[0]
-#         grad_input = conv(grad_dilate, weight_t, 1, K - 1 - self.padding)
+    
+    def compute(self, a: NDArray):
+        "计算最大值时保持维度,便于广播"
+        return array_api.max(a, axis=self.axes, keepdims=True)
+    
 
-#         #对W的导数 需要更换索引顺序
-#         grad_dilate = grad_dilate.transpose((0, 2)).transpose((0, 1))
-#         input_t = transpose(input,(0,3))
-#         grad_weight = conv(input_t, grad_dilate, 1, self.padding)
-#         grad_weight = grad_weight.transpose((0, 2)).transpose((0, 1))
+    '''
+        反向传播
+        对于原来的输入,找到其最大值的所有位置,将梯度平均返回
+        e.g.  out_grad = 100   a = [1,2, 3, 3,2,1]  
+                            grad = [0,0,50,50,0,0]   
+    '''
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0]
+        array = a.cached_data
 
-#         return Tensor(grad_input), grad_weight
+        max_values = self.compute(array)
+        
+        # True位置即将要返回grad的位置
+        mask = (array == max_values) 
+
+        # 计算最大值的数量
+        grad_sum = array_api.sum(mask, axis = self.axes, keepdims=True)
+        
+        grad = out_grad * mask / grad_sum
+        return grad
+
+
+def max(a: Tensor , axes=None):
+    return Max(axes)(a)
 
 
 
+class MaxPooling2D(TensorOp):
+    def __init__(
+        self,
+        kernel_size: int,
+        stride: Optional[int] = 1,
+        padding: Optional[int] = 0
+    ):
+        self.stride = stride
+        self.padding = padding
+        self.kernel_size = kernel_size
+        self._A_precomputed = None
+
+    
+    def precompute(self, A: Tensor):
+        '''
+            类似img2col的方法,将所有池化窗口提取
+        '''
+
+        N, H, W, C = A.shape
+        K = self.kernel_size
+        stride = self.stride
+        padding = self.padding
+
+        # 池化也可能有填充
+        pad_width = [(0,0), (0,0), (padding, padding), (padding, padding)]
+        _A = array_api.pad(A, pad_width, mode="constant",constant_values=0) if self.padding > 0 else A
+
+        H_out = (H - K + 2 * padding) // stride + 1
+        W_out = (W - K + 2 * padding) // stride + 1
+
+        # 使用as_strided提取所有窗口
+        Ns, Hs, Ws, Cs = _A.strides
+        _A = array_api.as_strided(
+            _A,
+            shape = (N, H_out, W_out, K, K, C),
+            strides = (Ns, Hs*stride, Ws*stride, Hs, Ws, Cs) 
+        )
+
+        self._A_precomputed = compact(_A)
+
+
+    def compute(self, A: Tensor):
+        self.precompute(A)
+
+        # 对于所有池化窗口,依次计算每个窗口的最大值
+        max_pool_out = array_api.max(self._A_precomputed, axis = (3, 4), keepdims=False)
+        return max_pool_out
+    
+
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        '''
+            k * k 维度被消去
+            找每个窗口最大值下标 argmax: (N, H, W, C) 
+            argmax存储每个窗口最大值下标   
+
+                  原始               窗口化      argmax下标   相对     绝对
+            e.g. [1,2,3,4]  =>      [1,2,5,6]  =>   3   ->  (1,1) -> (1,1) 
+                 [5,6,9,8] windows  [3,4,9,8]       2   ->  (1,0) -> (1,2)
+                 [2,3,4,5]          [2,3,6,7]       3
+                 [6,7,8,9]          [4,5,8,9]       3          
+        '''
+        # 获取预计算的窗口数据 (N, H_out, W_out, K, K, C)
+        array = self._A_precomputed   
+        
+        N, H_out, W_out, K, _, C = array.shape
+        
+       
+        # (N, H_out, W_out, K, K, C) -> (N, H_out, W_out, C, K*K)
+        # 将窗口展平
+        windows_flat = array.transpose((0, 1, 2, 5, 3, 4)).reshape(N, H_out, W_out, C, K*K)
+        
+        # 在每个窗口内找最大值索引 (N, H_out, W_out, C)
+        argmax = array_api.argmax(windows_flat, axes=-1) 
+        
+        # 创建与输入形状相同的梯度矩阵
+        grad_input = array_api.zeros_like(node.inputs[0].cached_data)
+        
+
+        if isinstance(grad_input, (numpy.generic, numpy.ndarray)):
+            api = numpy
+        else:
+            api = cupy
+        
+        # 遍历所有输出位置 ndindex用于逐个举出索引(0,0,0,0) => (N,H_out,W_out,C)
+        for index in api.ndindex(argmax.shape):
+            n, h, w, c = index
+            # 最大值在窗口内的线性索引 (0 到 K*K-1)
+            max_index = argmax[index]  
+            
+            # 将线性索引转换为二维坐标
+            mh = max_index // K  # 行偏移
+            mw = max_index % K   # 列偏移
+            
+            # 计算在原始输入中的绝对位置
+            original_h = h * self.stride + mh
+            original_w = w * self.stride + mw
+            
+            # 将梯度加到对应的最大值位置
+            grad_input[n, original_h, original_w, c] += out_grad.cached_data[index]
+        
+        return Tensor(grad_input)
 
 
 
+def maxPooling2D(a: Tensor, kernel_size, stride=1, padding=0):
+    '''
+        注意算子要求a格式: (N, H, W, C)
+    '''
+    return MaxPooling2D(kernel_size, stride, padding)(a)

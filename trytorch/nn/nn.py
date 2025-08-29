@@ -443,3 +443,29 @@ class ConvBN(Module):
         return self.relu(self.bn(self.conv(x)))
 
     
+class MaxPooling2D(Module):
+    '''
+        (N, C, H, W) => (N, C, H, W)
+    '''
+    def __init__(self, kernel_size, stride=1, padding=0, device=None, dtype="float32"):
+        if isinstance(kernel_size, tuple):
+            kernel_size = kernel_size[0]
+        if isinstance(stride, tuple):
+            stride = stride[0]
+        self.kernel_size = kernel_size
+        self.padding = padding
+        self.stride = stride
+        self.device = device
+        self.dtype = dtype
+
+    
+    def forward(self, x: Tensor) -> Tensor:
+        # (N, C, H, W) -> (N, H, W, C)
+        x = ops.transpose(ops.transpose(x), (1,3))
+
+        x = ops.maxPooling2D(x, self.kernel_size, self.stride, self.padding)
+
+        x = ops.transpose(ops.transpose(x, (1,3)))
+
+        return x
+    
