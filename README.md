@@ -5,7 +5,7 @@ Try to implement basic functions in pytorch
   <img src="figures/logo.PNG" width="500"/>
 </p>
 
-## 🤗 Fuction
+## 🤗 Function
 - 自动梯度
 - 网络搭建(线性,卷积,池化)
 - gpu加速(使用cupy)
