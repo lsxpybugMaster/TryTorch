@@ -346,8 +346,9 @@ class Residual(Module):
 
 class Conv(Module):
     '''
-        X: (N, C, H, W) -> (N, C, H, W)
-        W: (K, K, Cin, Cout)
+        X: (N, C, H, W) -> (N, C, H, W)                        \n
+        W: (K, K, Cin, Cout)                                   \n
+        padding = kernelsize // 2   不支持显示声明
     '''
     def __init__(
         self, 

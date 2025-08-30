@@ -42,6 +42,7 @@ class Dataset:
 class DataLoader:
     '''
         数据加载器 = 数据集 + 迭代器
+        重要功能,提取数据并转换为Tensor
     '''
 
     def __init__(
